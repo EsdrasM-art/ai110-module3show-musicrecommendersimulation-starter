@@ -59,3 +59,58 @@ def test_explain_recommendation_returns_non_empty_string():
     explanation = rec.explain_recommendation(user, song)
     assert isinstance(explanation, str)
     assert explanation.strip() != ""
+
+
+# --- Functional API tests (load_songs / score_song / recommend_songs) -------
+from src.recommender import load_songs, score_song, recommend_songs, EXPERIMENT_WEIGHTS
+
+
+def test_load_songs_converts_numeric_fields():
+    songs = load_songs("data/songs.csv")
+    assert len(songs) >= 10
+    first = songs[0]
+    assert isinstance(first["id"], int)
+    assert isinstance(first["energy"], float)
+    assert isinstance(first["tempo_bpm"], float)
+    assert isinstance(first["title"], str)
+
+
+def test_score_song_returns_score_and_reasons():
+    song = {"title": "X", "genre": "pop", "mood": "happy", "energy": 0.8, "acousticness": 0.2}
+    score, reasons = score_song({"genre": "pop", "mood": "happy", "energy": 0.8}, song)
+    # 2.0 genre + 1.0 mood + 1.0 perfect energy
+    assert score == 4.0
+    assert any("genre match" in r for r in reasons)
+    assert any("mood match" in r for r in reasons)
+
+
+def test_energy_rewards_closeness_not_magnitude():
+    prefs = {"energy": 0.4}
+    close = {"genre": "x", "mood": "x", "energy": 0.45, "acousticness": 0.5}
+    loud = {"genre": "x", "mood": "x", "energy": 0.95, "acousticness": 0.5}
+    assert score_song(prefs, close)[0] > score_song(prefs, loud)[0]
+
+
+def test_labels_are_case_and_space_insensitive():
+    song = {"genre": "jazz", "mood": "relaxed", "energy": 0.5, "acousticness": 0.5}
+    score, _ = score_song({"genre": "  Jazz ", "mood": "RELAXED"}, song)
+    assert score == 3.0
+
+
+def test_recommend_songs_sorted_and_limited():
+    songs = load_songs("data/songs.csv")
+    results = recommend_songs({"genre": "lofi", "mood": "chill", "energy": 0.35}, songs, k=3)
+    assert len(results) == 3
+    scores = [score for _, score, _ in results]
+    assert scores == sorted(scores, reverse=True)
+    assert results[0][0]["genre"] == "lofi"
+    assert isinstance(results[0][2], str)
+
+
+def test_experiment_weights_shift_ranking_toward_energy():
+    songs = load_songs("data/songs.csv")
+    prefs = {"genre": "pop", "mood": "happy", "energy": 0.8}
+    base_titles = [s["title"] for s, _, _ in recommend_songs(prefs, songs, k=5)]
+    exp_titles = [s["title"] for s, _, _ in recommend_songs(prefs, songs, k=5, weights=EXPERIMENT_WEIGHTS)]
+    # Rooftop Lights (indie pop, happy, close energy) climbs when genre matters less
+    assert exp_titles.index("Rooftop Lights") < base_titles.index("Rooftop Lights")
